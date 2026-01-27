@@ -97,6 +97,9 @@ func processDomains(ctx context.Context) error {
 
 func processDomain(stat libvirt.DomainStats, hostMemStatus int) error {
 	domainName, err := stat.Domain.GetName()
+	if err != nil {
+		return fmt.Errorf("Failed to get domain name: %v", err)
+	}
 	domainMemUsed := stat.Balloon.Available - stat.Balloon.Usable
 	domainMemUsedProc := float64(domainMemUsed) / float64(stat.Balloon.Available) * 100
 	domainMemStatus := usedMemStatus(domainMemUsedProc)
