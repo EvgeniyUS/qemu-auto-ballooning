@@ -38,7 +38,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	ticker := time.NewTicker(10 * time.Second) // TTL
+	ticker := time.NewTicker(5 * time.Second) // TTL
 	defer ticker.Stop()
 
 	for {
