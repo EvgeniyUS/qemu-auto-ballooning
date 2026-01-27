@@ -41,13 +41,21 @@ func main() {
 	ticker := time.NewTicker(5 * time.Second) // TTL
 	defer ticker.Stop()
 
+	// Connecting to QEMU
+	conn, err := libvirt.NewConnect("qemu:///system")
+	if err != nil {
+		slog.Error(fmt.Sprintf("Failed to connect to QEMU: %v", err))
+		return
+	}
+	defer conn.Close()
+
 	for {
 		select {
 		case <-ctx.Done():
 			slog.Info("Shutting down...")
 			return
 		case <-ticker.C:
-			err := processDomains(ctx)
+			err := processDomains(ctx, conn)
 			if err != nil {
 				slog.Error(fmt.Sprintf("%v", err))
 			}
@@ -55,21 +63,14 @@ func main() {
 	}
 }
 
-func processDomains(ctx context.Context) error {
-	// Connecting to QEMU
-	conn, err := libvirt.NewConnect("qemu:///system")
-	if err != nil {
-		return fmt.Errorf("Failed to connect to QEMU: %v", err)
-	}
-	defer conn.Close()
-
+func processDomains(ctx context.Context, conn *libvirt.Connect) error {
 	// List of active VMs with memory data
 	stats, err := conn.GetAllDomainStats([]*libvirt.Domain{}, libvirt.DOMAIN_STATS_BALLOON, libvirt.CONNECT_GET_ALL_DOMAINS_STATS_RUNNING)
 	if err != nil {
 		return fmt.Errorf("Failed to get active domains with memory stats: %v", err)
 	}
 
-	// Host loading status
+	// Host used memory status
 	hostMemStats, err := mem.VirtualMemory()
 	if err != nil {
 		return fmt.Errorf("Failed to get system memory stats: %v", err)
