@@ -15,12 +15,9 @@ import (
 )
 
 const (
-	low = 0
-	mid = 1
-	high = 2
-	crit = 3
-
-	step float64 = 0.1
+	parallelOperations	int64			= 5		// number of parallel domains processed
+	TTL					time.Duration	= 5		// seconds
+	memoryAmountStep	float64			= 0.1	// 10% of current memory balloon
 )
 
 var (
@@ -29,22 +26,26 @@ var (
 
 func init() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
-	sem = semaphore.NewWeighted(5) // Number of parallel operations
+	sem = semaphore.NewWeighted(parallelOperations)
 }
 
 func main() {
 	slog.Info("Starting...")
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(
+		context.Background(),
+		syscall.SIGINT,
+		syscall.SIGTERM
+	)
 	defer cancel()
 
-	ticker := time.NewTicker(5 * time.Second) // TTL
+	ticker := time.NewTicker(TTL * time.Second)
 	defer ticker.Stop()
 
 	// Connecting to QEMU
 	conn, err := libvirt.NewConnect("qemu:///system")
 	if err != nil {
-		slog.Error(fmt.Sprintf("Failed to connect to QEMU: %v", err))
+		slog.Error("Failed to connect to QEMU", "error", err)
 		return
 	}
 	defer conn.Close()
@@ -55,17 +56,21 @@ func main() {
 			slog.Info("Shutting down...")
 			return
 		case <-ticker.C:
-			err := processDomains(ctx, conn)
+			err := processActiveDomains(ctx, conn)
 			if err != nil {
-				slog.Error(fmt.Sprintf("%v", err))
+				slog.Error("Error in processActiveDomains", "error", err)
 			}
 		}
 	}
 }
 
-func processDomains(ctx context.Context, conn *libvirt.Connect) error {
+func processActiveDomains(ctx context.Context, conn *libvirt.Connect) error {
 	// List of active VMs with memory data
-	stats, err := conn.GetAllDomainStats([]*libvirt.Domain{}, libvirt.DOMAIN_STATS_BALLOON, libvirt.CONNECT_GET_ALL_DOMAINS_STATS_RUNNING)
+	stats, err := conn.GetAllDomainStats(
+		[]*libvirt.Domain{},
+		libvirt.DOMAIN_STATS_BALLOON,
+		libvirt.CONNECT_GET_ALL_DOMAINS_STATS_RUNNING
+	)
 	if err != nil {
 		return fmt.Errorf("Failed to get active domains with memory stats: %v", err)
 	}
@@ -80,7 +85,7 @@ func processDomains(ctx context.Context, conn *libvirt.Connect) error {
 	for _, stat := range stats {
 		err = sem.Acquire(ctx, 1)
 		if err != nil {
-			slog.Error(fmt.Sprintf("Semaphore acquire failed: %v", err))
+			slog.Error("Semaphore acquire failed", "error", err)
 			continue
 		}
 
@@ -88,7 +93,7 @@ func processDomains(ctx context.Context, conn *libvirt.Connect) error {
 			defer sem.Release(1)
 			err := processDomain(_stat, hostMemStatus)
 			if err != nil {
-				slog.Error(fmt.Sprintf("Error while processing domains: %v", err))
+				slog.Error("Error in processDomain", "error", err)
 			}
 			_stat.Domain.Free()
 		}(stat)
@@ -110,7 +115,7 @@ func processDomain(stat libvirt.DomainStats, hostMemStatus int) error {
 		return nil
 	}
 
-	changeAmount := float64(stat.Balloon.Current) * step * float64(stepPower)
+	changeAmount := float64(stat.Balloon.Current) * memoryAmountStep * float64(stepPower)
 	newBalloon := uint64(float64(stat.Balloon.Current) + changeAmount)
 
 	if newBalloon > stat.Balloon.Maximum {
@@ -125,9 +130,12 @@ func processDomain(stat libvirt.DomainStats, hostMemStatus int) error {
 		return nil
 	}
 
-	_, err = stat.Domain.QemuMonitorCommand(fmt.Sprintf("balloon %d", newBalloon / 1024), libvirt.DOMAIN_QEMU_MONITOR_COMMAND_HMP)
+	_, err = stat.Domain.QemuMonitorCommand(
+		fmt.Sprintf("balloon %d", newBalloon / 1024),
+		libvirt.DOMAIN_QEMU_MONITOR_COMMAND_HMP
+	)
 	if err != nil {
-		return fmt.Errorf("Failed to change domains memory balloon: %v", err)
+		return fmt.Errorf("Failed to change domains (%s) memory balloon: %v", domainName, err)
 	} else {
 		slog.Info(
 			domainName,
@@ -142,13 +150,13 @@ func processDomain(stat libvirt.DomainStats, hostMemStatus int) error {
 
 func usedMemStatus(usedMemPercent float64) int {
     if usedMemPercent > 90.0 {
-        return crit
+        return 3	// critical
     }
 	if usedMemPercent > 70.0 {
-        return high
+        return 2	// high
     }
 	if usedMemPercent > 50.0 {
-        return mid
+        return 1	// middle
     }
-	return low
+	return 0		// low
 }
