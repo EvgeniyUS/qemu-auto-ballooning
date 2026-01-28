@@ -1,4 +1,4 @@
-Auto ballooning for QEMU guests (VMs) for a memory over-committed host.
+Auto ballooning for QEMU guests (VMs) on a memory over-committed host.
 
 The VirtIO Balloon Driver must be installed in the guest's operating system. It is pre-installed on most Linux systems.
 
