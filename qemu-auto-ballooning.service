@@ -1,0 +1,18 @@
+[Unit]
+Description=QEMU Auto Ballooning
+After=network.target qemu-kvm.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/qemu-auto-ballooning
+Restart=always
+RestartSec=10
+
+LimitNOFILE=65536
+LimitNPROC=4096
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

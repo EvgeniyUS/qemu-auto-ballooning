@@ -1,0 +1,32 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=1
+    goos:
+      - linux
+    goarch:
+      - amd64
+
+nfpms:
+  - package_name: qemu-auto-ballooning
+    homepage: https://github.com/EvgeniyUS/qemu-auto-ballooning
+    maintainer: Evgeniy Us <eugene.v.us@gmail.com>
+    description: Auto ballooning for QEMU guests (VMs) on a memory over-committed host
+    license: MIT
+    formats:
+      - deb
+    dependencies:
+      - systemd
+      - qemu
+      - qemu-kvm
+    contents:
+      - src: qemu-auto-ballooning.conf
+        dst: /etc/qemu-auto-ballooning/qemu-auto-ballooning.conf
+        type: config
+      - src: qemu-auto-ballooning.service
+        dst: /lib/systemd/system/qemu-auto-ballooning.service
