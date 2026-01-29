@@ -35,7 +35,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(
 		context.Background(),
 		syscall.SIGINT,
-		syscall.SIGTERM
+		syscall.SIGTERM,
 	)
 	defer cancel()
 
@@ -69,7 +69,7 @@ func processActiveDomains(ctx context.Context, conn *libvirt.Connect) error {
 	stats, err := conn.GetAllDomainStats(
 		[]*libvirt.Domain{},
 		libvirt.DOMAIN_STATS_BALLOON,
-		libvirt.CONNECT_GET_ALL_DOMAINS_STATS_RUNNING
+		libvirt.CONNECT_GET_ALL_DOMAINS_STATS_RUNNING,
 	)
 	if err != nil {
 		return fmt.Errorf("Failed to get active domains with memory stats: %v", err)
@@ -132,7 +132,7 @@ func processDomain(stat libvirt.DomainStats, hostMemStatus int) error {
 
 	_, err = stat.Domain.QemuMonitorCommand(
 		fmt.Sprintf("balloon %d", newBalloon / 1024),
-		libvirt.DOMAIN_QEMU_MONITOR_COMMAND_HMP
+		libvirt.DOMAIN_QEMU_MONITOR_COMMAND_HMP,
 	)
 	if err != nil {
 		return fmt.Errorf("Failed to change domains (%s) memory balloon: %v", domainName, err)
