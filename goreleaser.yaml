@@ -22,8 +22,9 @@ nfpms:
       - deb
     dependencies:
       - systemd
-      - qemu
-      - qemu-kvm
+      - libvirt-daemon-system
+      - libvirt-clients
+      - qemu-system-x86
     contents:
       - src: qemu-auto-ballooning.conf
         dst: /etc/qemu-auto-ballooning/qemu-auto-ballooning.conf
