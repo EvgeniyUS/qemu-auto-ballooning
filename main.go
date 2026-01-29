@@ -75,6 +75,10 @@ func processActiveDomains(ctx context.Context, conn *libvirt.Connect) error {
 		return fmt.Errorf("Failed to get active domains with memory stats: %v", err)
 	}
 
+	if len(stats) == 0 {
+		return nil
+	}
+
 	// Host used memory status
 	hostMemStats, err := mem.VirtualMemory()
 	if err != nil {

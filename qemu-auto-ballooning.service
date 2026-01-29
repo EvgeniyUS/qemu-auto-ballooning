@@ -1,6 +1,6 @@
 [Unit]
 Description=QEMU Auto Ballooning
-After=network.target qemu-kvm.service
+After=libvirtd.service
 
 [Service]
 Type=simple
