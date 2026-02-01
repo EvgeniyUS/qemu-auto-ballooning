@@ -17,6 +17,7 @@ import (
 const (
 	parallelOperations	int64			= 5		// number of parallel domains processed
 	TTL					time.Duration	= 5		// seconds
+	memoryStatsPeriod	int				= 5		// the period in seconds for stats collection
 	memoryAmountStep	float64			= 0.1	// 10% of current memory balloon
 )
 
@@ -65,7 +66,7 @@ func main() {
 }
 
 func processActiveDomains(ctx context.Context, conn *libvirt.Connect) error {
-	// List of active VMs with memory data
+	// Running domains with memory stats
 	stats, err := conn.GetAllDomainStats(
 		[]*libvirt.Domain{},
 		libvirt.DOMAIN_STATS_BALLOON,
@@ -79,12 +80,22 @@ func processActiveDomains(ctx context.Context, conn *libvirt.Connect) error {
 		return nil
 	}
 
-	// Host used memory status
 	hostMemStats, err := mem.VirtualMemory()
 	if err != nil {
-		return fmt.Errorf("Failed to get system memory stats: %v", err)
+		return fmt.Errorf("Failed to get node memory stats: %v", err)
 	}
 	hostMemStatus := usedMemStatus(hostMemStats.UsedPercent)
+
+	// // Getmemorystatus does not return the values SReclaimable and KReclaimable
+	// nodeMemoryStats, err := conn.GetMemoryStats(libvirt.NODE_MEMORY_STATS_ALL_CELLS, 0)
+	// if err != nil {
+	// 	return fmt.Errorf("Failed to get node memory stats: %v", err)
+	// }
+	// slog.Info("debug", "nodeMemoryStats", nodeMemoryStats)
+	// nodeMemoryAvailable := nodeMemoryStats.Free + nodeMemoryStats.Buffers + nodeMemoryStats.Cached
+	// nodeMemoryUsed := nodeMemoryStats.Total - nodeMemoryAvailable
+	// nodeMemoryUsedPercent := float64(nodeMemoryUsed) / float64(nodeMemoryStats.Total) * 100
+	// hostMemStatus := usedMemStatus(nodeMemoryUsedPercent)
 
 	for _, stat := range stats {
 		err = sem.Acquire(ctx, 1)
@@ -110,6 +121,29 @@ func processDomain(stat libvirt.DomainStats, hostMemStatus int) error {
 	if err != nil {
 		return fmt.Errorf("Failed to get domain name: %v", err)
 	}
+
+	if !isMemoryStatsActual(stat.Balloon.LastUpdate) {
+		err = stat.Domain.SetMemoryStatsPeriod(memoryStatsPeriod, libvirt.DOMAIN_MEM_LIVE)
+		if err != nil {
+			return fmt.Errorf("Failed to set domain memory stats period: %v", err)
+		}
+		return nil
+	}
+
+	// // func (d *Domain) GetMetadata(metadataType DomainMetadataType, uri string, flags DomainModificationImpact) (string, error)
+	// metadata, err := stat.Domain.GetMetadata(libvirt.DomainMetadataType(1), "NULL", libvirt.DOMAIN_AFFECT_LIVE)
+	// if err != nil {
+	// 	return fmt.Errorf("Failed to get domain metadata: %v", err)
+	// }
+	// slog.Info("debug", "metadata", metadata)
+
+	// // "MinGuaranteeSet":false,"MinGuarantee":0
+	// memParams, err := stat.Domain.GetMemoryParameters(libvirt.DOMAIN_AFFECT_LIVE)
+	// if err != nil {
+	// 	return fmt.Errorf("Failed to get domain memory params: %v", err)
+	// }
+	// slog.Info("Domain params", "domainName", domainName, "memParams", memParams)
+
 	domainMemUsed := stat.Balloon.Available - stat.Balloon.Usable
 	domainMemUsedProc := float64(domainMemUsed) / float64(stat.Balloon.Available) * 100
 	domainMemStatus := usedMemStatus(domainMemUsedProc)
@@ -125,6 +159,7 @@ func processDomain(stat libvirt.DomainStats, hostMemStatus int) error {
 	if newBalloon > stat.Balloon.Maximum {
 		if stat.Balloon.Current < stat.Balloon.Maximum {
 			newBalloon = stat.Balloon.Maximum
+			changeAmount = float64(stat.Balloon.Maximum - stat.Balloon.Current)
 		} else {
 			return nil
 		}
@@ -163,4 +198,10 @@ func usedMemStatus(usedMemPercent float64) int {
         return 1	// middle
     }
 	return 0		// low
+}
+
+func isMemoryStatsActual(lastUpdate uint64) bool {
+	maxAgeSeconds := int64(memoryStatsPeriod)
+	now := time.Now().Unix()
+	return (now - int64(lastUpdate)) <= maxAgeSeconds
 }
