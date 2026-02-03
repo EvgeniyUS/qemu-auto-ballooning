@@ -138,12 +138,13 @@ func processDomain(stat libvirt.DomainStats, nodeMemoryUsedPercent float64) erro
 	domainMemoryUsed := stat.Balloon.Available - stat.Balloon.Usable
 	domainMemoryUsedPercent := float64(domainMemoryUsed) / float64(stat.Balloon.Available) * 100
 	changeDirection := getChangeDirection(domainMemoryUsedPercent, nodeMemoryUsedPercent)
-	changeAmount := float64(stat.Balloon.Current) * changePercent * float64(changeDirection)
-	newCurrent := uint64(float64(stat.Balloon.Current) + changeAmount)
 
 	if changeDirection == 0 {
 		return nil
 	}
+
+	changeAmount := float64(stat.Balloon.Current) * changePercent * float64(changeDirection)
+	newCurrent := uint64(float64(stat.Balloon.Current) + changeAmount)
 
 	if newCurrent > stat.Balloon.Maximum {
 		if stat.Balloon.Current < stat.Balloon.Maximum {
