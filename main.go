@@ -16,7 +16,7 @@ import (
 
 const (
 	parallelOperations	int64	= 5		// number of parallel domains processed
-	TTL					int		= 5		// seconds
+	serviceFrequency	int		= 5		// seconds
 	changePercent		float64	= 0.1	// 10% of current memory balloon
 )
 
@@ -39,7 +39,7 @@ func main() {
 	)
 	defer cancel()
 
-	ticker := time.NewTicker(time.Duration(TTL) * time.Second)
+	ticker := time.NewTicker(time.Duration(serviceFrequency) * time.Second)
 	defer ticker.Stop()
 
 	// Connecting to QEMU
@@ -128,7 +128,7 @@ func processDomain(stat libvirt.DomainStats, nodeMemoryUsedPercent float64) erro
 	}
 
 	if !isMemoryStatsActual(stat.Balloon.LastUpdate) {
-		err = stat.Domain.SetMemoryStatsPeriod(TTL, libvirt.DOMAIN_MEM_LIVE)
+		err = stat.Domain.SetMemoryStatsPeriod(serviceFrequency, libvirt.DOMAIN_MEM_LIVE)
 		if err != nil {
 			return fmt.Errorf("Failed to set domain memory stats period: %v", err)
 		}
@@ -183,7 +183,7 @@ func getChangeDirection(domainMemoryUsedPercent float64, nodeMemoryUsedPercent f
 }
 
 func isMemoryStatsActual(lastUpdate uint64) bool {
-	maxAgeSeconds := int64(TTL)
+	maxAgeSeconds := int64(serviceFrequency)
 	now := time.Now().Unix()
 	return (now - int64(lastUpdate)) <= maxAgeSeconds
 }
