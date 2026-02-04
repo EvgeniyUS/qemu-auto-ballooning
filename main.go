@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -15,23 +16,53 @@ import (
 )
 
 const (
+	configPath			string	= "/etc/qemu-auto-ballooning/qemu-auto-ballooning.conf"
 	parallelOperations	int64	= 5		// number of parallel domains processed
-	serviceFrequency	int		= 5		// seconds
-	changePercent		float64	= 0.1	// 10% of current memory balloon
+	frequencyDefault	int		= 5
+	changeDefault		float64	= 0.1	// 10% of current memory balloon
+	spreadDefault		int		= 10	// +-10%
 )
 
 var (
 	sem *semaphore.Weighted
+	cfg Config
 )
+
+type Config struct {
+    Frequency	int		`json:"frequency"`	// scan frequency of domains in seconds
+    Change		float64	`json:"change"`		// % of current memory balloon
+    Spread		int		`json:"spread"`		// the minimum acceptable spread (+%/-%) of memory usage values between the node and the VM 
+}
+
+func loadConfig() {
+	fileBytes, err := os.ReadFile(configPath)   
+	if err != nil {
+		slog.Error("Failed to open config file", "error", err)
+	} else {
+		err = json.Unmarshal(fileBytes, &cfg)
+		if err != nil {
+			slog.Error("Failed to decode json in config file", "error", err)
+		}
+	}
+	if cfg.Frequency == 0 {
+		cfg.Frequency = frequencyDefault
+	}
+	if cfg.Change == 0 {
+		cfg.Change = changeDefault
+	}
+	if cfg.Spread == 0 {
+		cfg.Spread = spreadDefault
+	}
+	slog.Info("Loaded", "config", cfg)
+}
 
 func init() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	loadConfig()
 	sem = semaphore.NewWeighted(parallelOperations)
 }
 
 func main() {
-	slog.Info("Starting...")
-
 	ctx, cancel := signal.NotifyContext(
 		context.Background(),
 		syscall.SIGINT,
@@ -39,7 +70,7 @@ func main() {
 	)
 	defer cancel()
 
-	ticker := time.NewTicker(time.Duration(serviceFrequency) * time.Second)
+	ticker := time.NewTicker(time.Duration(cfg.Frequency) * time.Second)
 	defer ticker.Stop()
 
 	// Connecting to QEMU
@@ -50,10 +81,12 @@ func main() {
 	}
 	defer conn.Close()
 
+	slog.Info("Patrolling...")
+
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Info("Shutting down...")
+			slog.Info("Stopped")
 			return
 		case <-ticker.C:
 			err := processActiveDomains(ctx, conn)
@@ -128,7 +161,7 @@ func processDomain(stat libvirt.DomainStats, nodeMemoryUsedPercent float64) erro
 	}
 
 	if !isMemoryStatsActual(stat.Balloon.LastUpdate) {
-		err = stat.Domain.SetMemoryStatsPeriod(serviceFrequency, libvirt.DOMAIN_MEM_LIVE)
+		err = stat.Domain.SetMemoryStatsPeriod(cfg.Frequency, libvirt.DOMAIN_MEM_LIVE)
 		if err != nil {
 			return fmt.Errorf("Failed to set domain memory stats period: %v", err)
 		}
@@ -143,7 +176,7 @@ func processDomain(stat libvirt.DomainStats, nodeMemoryUsedPercent float64) erro
 		return nil
 	}
 
-	changeAmount := float64(stat.Balloon.Current) * changePercent * float64(changeDirection)
+	changeAmount := float64(stat.Balloon.Current) * cfg.Change * float64(changeDirection)
 	newCurrent := uint64(float64(stat.Balloon.Current) + changeAmount)
 
 	if newCurrent > stat.Balloon.Maximum {
@@ -180,11 +213,11 @@ func processDomain(stat libvirt.DomainStats, nodeMemoryUsedPercent float64) erro
 }
 
 func getChangeDirection(domainMemoryUsedPercent float64, nodeMemoryUsedPercent float64) int {
-	return int(domainMemoryUsedPercent - nodeMemoryUsedPercent) / 10
+	return int(domainMemoryUsedPercent - nodeMemoryUsedPercent) / cfg.Spread
 }
 
 func isMemoryStatsActual(lastUpdate uint64) bool {
-	maxAgeSeconds := int64(serviceFrequency)
+	maxAgeSeconds := int64(cfg.Frequency)
 	now := time.Now().Unix()
 	return (now - int64(lastUpdate)) <= maxAgeSeconds
 }
