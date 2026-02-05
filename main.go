@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"log/slog"
 	"os"
@@ -21,6 +22,7 @@ const (
 	frequencyDefault	int		= 5
 	changeDefault		float64	= 0.1	// 10% of current memory balloon
 	spreadDefault		int		= 10	// +-10%
+	metadataUriDefault	string	= "http://controller/"
 )
 
 var (
@@ -28,13 +30,19 @@ var (
 	cfg Config
 )
 
+type Metadata struct {
+	XMLName				xml.Name	`xml:"instance"`
+	Safety				bool		`xml:"safety"`
+	MemoryMinGuarantee	uint64		`xml:"memory_min_guarantee"`
+}
+
 type Config struct {
     Frequency	int		`json:"frequency"`	// scan frequency of domains in seconds
     Change		float64	`json:"change"`		// % of current memory balloon
     Spread		int		`json:"spread"`		// the minimum acceptable spread (+%/-%) of memory usage values between the node and the VM 
 }
 
-func loadConfig() {
+func LoadConfig() {
 	fileBytes, err := os.ReadFile(configPath)   
 	if err != nil {
 		slog.Error("Failed to open config file", "error", err)
@@ -58,7 +66,7 @@ func loadConfig() {
 
 func init() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
-	loadConfig()
+	LoadConfig()
 	sem = semaphore.NewWeighted(parallelOperations)
 }
 
@@ -89,15 +97,15 @@ func main() {
 			slog.Info("Stopped")
 			return
 		case <-ticker.C:
-			err := processActiveDomains(ctx, conn)
+			err := ProcessActiveDomains(ctx, conn)
 			if err != nil {
-				slog.Error("Error in processActiveDomains", "error", err)
+				slog.Error("Error in ProcessActiveDomains", "error", err)
 			}
 		}
 	}
 }
 
-func processActiveDomains(ctx context.Context, conn *libvirt.Connect) error {
+func ProcessActiveDomains(ctx context.Context, conn *libvirt.Connect) error {
 	// Running domains with memory stats
 	stats, err := conn.GetAllDomainStats(
 		[]*libvirt.Domain{},
@@ -107,7 +115,6 @@ func processActiveDomains(ctx context.Context, conn *libvirt.Connect) error {
 	if err != nil {
 		return fmt.Errorf("Failed to get active domains with memory stats: %v", err)
 	}
-	// slog.Info("debug", "stats", stats)
 
 	if len(stats) == 0 {
 		return nil
@@ -137,9 +144,9 @@ func processActiveDomains(ctx context.Context, conn *libvirt.Connect) error {
 
 		go func(_stat libvirt.DomainStats) {
 			defer sem.Release(1)
-			err := processDomain(_stat, nodeMemoryStats.UsedPercent)
+			err := ProcessDomain(_stat, nodeMemoryStats.UsedPercent)
 			if err != nil {
-				slog.Error("Error in processDomain", "error", err)
+				slog.Error("Error in ProcessDomain", "error", err)
 			}
 			_stat.Domain.Free()
 		}(stat)
@@ -147,7 +154,19 @@ func processActiveDomains(ctx context.Context, conn *libvirt.Connect) error {
 	return nil
 }
 
-func processDomain(stat libvirt.DomainStats, nodeMemoryUsedPercent float64) error {
+func GetMetadata(domain *libvirt.Domain) *Metadata {
+	var metadata Metadata
+	xmlData, _ := domain.GetMetadata(
+		libvirt.DOMAIN_METADATA_ELEMENT,
+		metadataUriDefault,
+		libvirt.DOMAIN_AFFECT_LIVE,
+	)
+	xml.Unmarshal([]byte(xmlData), &metadata)
+	metadata.MemoryMinGuarantee = metadata.MemoryMinGuarantee * 1024
+	return &metadata
+}
+
+func ProcessDomain(stat libvirt.DomainStats, nodeMemoryUsedPercent float64) error {
 
 	// // Maybe it's better this way... It's not clear yet
 	// memStats, err := stat.Domain.MemoryStats(13, 0)
@@ -155,6 +174,12 @@ func processDomain(stat libvirt.DomainStats, nodeMemoryUsedPercent float64) erro
 	// 	return fmt.Errorf("Failed to get domain memory stats: %v", err)
 	// }
 	// slog.Info("debug", "memStats", memStats)
+
+	domainMetadata := GetMetadata(stat.Domain)
+
+	if domainMetadata.Safety {
+		return nil
+	}
 
 	domainName, err := stat.Domain.GetName()
 	if err != nil {
@@ -170,7 +195,7 @@ func processDomain(stat libvirt.DomainStats, nodeMemoryUsedPercent float64) erro
 		return nil
 	}
 
-	if !isMemoryStatsActual(stat.Balloon.LastUpdate) {
+	if !IsMemoryStatsActual(stat.Balloon.LastUpdate) {
 		err = stat.Domain.SetMemoryStatsPeriod(cfg.Frequency, libvirt.DOMAIN_MEM_LIVE)
 		if err != nil {
 			return fmt.Errorf("Failed to set domains (%s) memory stats period: %v", domainName, err)
@@ -180,7 +205,7 @@ func processDomain(stat libvirt.DomainStats, nodeMemoryUsedPercent float64) erro
 
 	domainMemoryUsed := stat.Balloon.Available - stat.Balloon.Usable
 	domainMemoryUsedPercent := float64(domainMemoryUsed) / float64(stat.Balloon.Available) * 100
-	changeDirection := getChangeDirection(domainMemoryUsedPercent, nodeMemoryUsedPercent)
+	changeDirection := GetChangeDirection(domainMemoryUsedPercent, nodeMemoryUsedPercent)
 
 	if changeDirection == 0 {
 		return nil
@@ -192,7 +217,7 @@ func processDomain(stat libvirt.DomainStats, nodeMemoryUsedPercent float64) erro
 	if newCurrent > stat.Balloon.Maximum {
 		if stat.Balloon.Current < stat.Balloon.Maximum {
 			newCurrent = stat.Balloon.Maximum
-			changeAmount = float64(stat.Balloon.Maximum - stat.Balloon.Current)
+			changeAmount = float64(newCurrent - stat.Balloon.Current)
 		} else {
 			return nil
 		}
@@ -200,6 +225,15 @@ func processDomain(stat libvirt.DomainStats, nodeMemoryUsedPercent float64) erro
 
 	if newCurrent <= domainMemoryUsed {
 		return nil
+	}
+
+	if newCurrent < domainMetadata.MemoryMinGuarantee {
+		if stat.Balloon.Current > domainMetadata.MemoryMinGuarantee {
+			newCurrent = domainMetadata.MemoryMinGuarantee
+			changeAmount = float64(stat.Balloon.Current - newCurrent)
+		} else {
+			return nil
+		}
 	}
 
 	_, err = stat.Domain.QemuMonitorCommand(
@@ -215,6 +249,7 @@ func processDomain(stat libvirt.DomainStats, nodeMemoryUsedPercent float64) erro
 			"current", newCurrent,
 			"maximum", stat.Balloon.Maximum,
 			"used", domainMemoryUsed,
+			"minGuarantee", domainMetadata.MemoryMinGuarantee,
 			"domainMemoryUsedPercent", int(domainMemoryUsedPercent),
 			"nodeMemoryUsedPercent", int(nodeMemoryUsedPercent),
 		)
@@ -222,11 +257,11 @@ func processDomain(stat libvirt.DomainStats, nodeMemoryUsedPercent float64) erro
 	return nil
 }
 
-func getChangeDirection(domainMemoryUsedPercent float64, nodeMemoryUsedPercent float64) int {
+func GetChangeDirection(domainMemoryUsedPercent float64, nodeMemoryUsedPercent float64) int {
 	return int(domainMemoryUsedPercent - nodeMemoryUsedPercent) / cfg.Spread
 }
 
-func isMemoryStatsActual(lastUpdate uint64) bool {
+func IsMemoryStatsActual(lastUpdate uint64) bool {
 	maxAgeSeconds := int64(cfg.Frequency)
 	now := time.Now().Unix()
 	return (now - int64(lastUpdate)) <= maxAgeSeconds
