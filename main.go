@@ -107,6 +107,7 @@ func processActiveDomains(ctx context.Context, conn *libvirt.Connect) error {
 	if err != nil {
 		return fmt.Errorf("Failed to get active domains with memory stats: %v", err)
 	}
+	// slog.Info("debug", "stats", stats)
 
 	if len(stats) == 0 {
 		return nil
@@ -160,10 +161,19 @@ func processDomain(stat libvirt.DomainStats, nodeMemoryUsedPercent float64) erro
 		return fmt.Errorf("Failed to get domain name: %v", err)
 	}
 
+	domainInfo, err := stat.Domain.GetInfo()
+	if err != nil {
+		return fmt.Errorf("Failed to get domains (%s) info: %v", domainName, err)
+	}
+	domainCpuTime := int(domainInfo.CpuTime) / int(domainInfo.NrVirtCpu) / 1000000000
+	if domainCpuTime < 20 { // 20s of CpuTime for domain boot
+		return nil
+	}
+
 	if !isMemoryStatsActual(stat.Balloon.LastUpdate) {
 		err = stat.Domain.SetMemoryStatsPeriod(cfg.Frequency, libvirt.DOMAIN_MEM_LIVE)
 		if err != nil {
-			return fmt.Errorf("Failed to set domain memory stats period: %v", err)
+			return fmt.Errorf("Failed to set domains (%s) memory stats period: %v", domainName, err)
 		}
 		return nil
 	}
