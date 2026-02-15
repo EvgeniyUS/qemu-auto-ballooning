@@ -119,10 +119,10 @@ func ProcessActiveDomains(ctx context.Context) error {
 	}
 	defer conn.Close()
 
-	// Running domains with memory stats
+	// Running domains with stats
 	stats, err := conn.GetAllDomainStats(
 		[]*libvirt.Domain{},
-		libvirt.DOMAIN_STATS_BALLOON,
+		libvirt.DOMAIN_STATS_BALLOON|libvirt.DOMAIN_STATS_VCPU,
 		libvirt.CONNECT_GET_ALL_DOMAINS_STATS_RUNNING,
 	)
 	if err != nil {
@@ -175,7 +175,7 @@ func GetMetadata(domain *libvirt.Domain) *Metadata {
 		libvirt.DOMAIN_AFFECT_LIVE,
 	)
 	xml.Unmarshal([]byte(xmlData), &metadata)
-	metadata.MemoryMinGuarantee = metadata.MemoryMinGuarantee * 1024
+	metadata.MemoryMinGuarantee *= 1024
 	return &metadata
 }
 
@@ -194,18 +194,13 @@ func ProcessDomain(stat *libvirt.DomainStats, nodeMemoryUsedPercent float64) err
 		return nil
 	}
 
+	if stat.Vcpu[0].Time < 20000000000 { // 20s of Vcpu for domain boot
+		return nil
+	}
+
 	domainName, err := stat.Domain.GetName()
 	if err != nil {
 		return fmt.Errorf("Failed to get domain name: %v", err)
-	}
-
-	domainInfo, err := stat.Domain.GetInfo()
-	if err != nil {
-		return fmt.Errorf("Failed to get domains (%s) info: %v", domainName, err)
-	}
-	domainCpuTime := int(domainInfo.CpuTime) / int(domainInfo.NrVirtCpu) / 1000000000
-	if domainCpuTime < 20 { // 20s of CpuTime for domain boot
-		return nil
 	}
 
 	if !IsMemoryStatsActual(stat.Balloon.LastUpdate) {
