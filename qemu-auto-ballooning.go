@@ -48,7 +48,7 @@ func LogMemoryStats() {
 	runtime.ReadMemStats(&m)
 	slog.Info("Memory stats",
 		"Alloc", m.Alloc,
-		// "TotalAlloc", m.TotalAlloc,
+		"TotalAlloc", m.TotalAlloc,
 		"Sys", m.Sys,
 		"NumGC", m.NumGC,
 		"Goroutines", runtime.NumGoroutine(),
@@ -122,7 +122,7 @@ func ProcessActiveDomains(ctx context.Context) error {
 	// Running domains with memory stats
 	stats, err := conn.GetAllDomainStats(
 		[]*libvirt.Domain{},
-		libvirt.DOMAIN_STATS_BALLOON|libvirt.DOMAIN_STATS_BLOCK,
+		libvirt.DOMAIN_STATS_BALLOON,
 		libvirt.CONNECT_GET_ALL_DOMAINS_STATS_RUNNING,
 	)
 	if err != nil {
@@ -198,11 +198,6 @@ func ProcessDomain(stat *libvirt.DomainStats, nodeMemoryUsedPercent float64) err
 	if err != nil {
 		return fmt.Errorf("Failed to get domain name: %v", err)
 	}
-
-	slog.Info(
-		domainName,
-		"block", stat.Block,
-	)
 
 	domainInfo, err := stat.Domain.GetInfo()
 	if err != nil {
