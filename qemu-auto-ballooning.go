@@ -8,21 +8,22 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"time"
+	"runtime"
 	"syscall"
+	"time"
 
 	"github.com/shirou/gopsutil/v4/mem"
-    "libvirt.org/go/libvirt"
 	"golang.org/x/sync/semaphore"
+	"libvirt.org/go/libvirt"
 )
 
 const (
-	configPath			string	= "/etc/qemu-auto-ballooning/qemu-auto-ballooning.conf"
-	parallelOperations	int64	= 5		// number of parallel domains processed
-	frequencyDefault	int		= 5
-	changeDefault		float64	= 0.1	// 10% of current memory balloon
-	spreadDefault		int		= 10	// +-10%
-	metadataUriDefault	string	= "http://controller/"
+	configPath         string  = "/etc/qemu-auto-ballooning/qemu-auto-ballooning.conf"
+	parallelOperations int64   = 5 // number of parallel domains processed
+	frequencyDefault   int     = 5
+	changeDefault      float64 = 0.1 // 10% of current memory balloon
+	spreadDefault      int     = 10  // +-10%
+	metadataUriDefault string  = "http://controller/"
 )
 
 var (
@@ -31,19 +32,31 @@ var (
 )
 
 type Metadata struct {
-	XMLName				xml.Name	`xml:"instance"`
-	Safety				bool		`xml:"safety"`
-	MemoryMinGuarantee	uint64		`xml:"memory_min_guarantee"`
+	XMLName            xml.Name `xml:"instance"`
+	Safety             bool     `xml:"safety"`
+	MemoryMinGuarantee uint64   `xml:"memory_min_guarantee"`
 }
 
 type Config struct {
-    Frequency	int		`json:"frequency"`	// scan frequency of domains in seconds
-    Change		float64	`json:"change"`		// % of current memory balloon
-    Spread		int		`json:"spread"`		// the minimum acceptable spread (+%/-%) of memory usage values between the node and the VM 
+	Frequency int     `json:"frequency"` // scan frequency of domains in seconds
+	Change    float64 `json:"change"`    // % of current memory balloon
+	Spread    int     `json:"spread"`    // the minimum acceptable spread (+%/-%) of memory usage values between the node and the VM
+}
+
+func LogMemoryStats() {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	slog.Info("Memory stats",
+		"Alloc", m.Alloc,
+		// "TotalAlloc", m.TotalAlloc,
+		"Sys", m.Sys,
+		"NumGC", m.NumGC,
+		"Goroutines", runtime.NumGoroutine(),
+	)
 }
 
 func LoadConfig() {
-	fileBytes, err := os.ReadFile(configPath)   
+	fileBytes, err := os.ReadFile(configPath)
 	if err != nil {
 		slog.Error("Failed to open config file", "error", err)
 	} else {
@@ -81,14 +94,6 @@ func main() {
 	ticker := time.NewTicker(time.Duration(cfg.Frequency) * time.Second)
 	defer ticker.Stop()
 
-	// Connecting to QEMU
-	conn, err := libvirt.NewConnect("qemu:///system")
-	if err != nil {
-		slog.Error("Failed to connect to QEMU", "error", err)
-		return
-	}
-	defer conn.Close()
-
 	slog.Info("Patrolling...")
 
 	for {
@@ -97,7 +102,8 @@ func main() {
 			slog.Info("Stopped")
 			return
 		case <-ticker.C:
-			err := ProcessActiveDomains(ctx, conn)
+			// LogMemoryStats()
+			err := ProcessActiveDomains(ctx)
 			if err != nil {
 				slog.Error("Error in ProcessActiveDomains", "error", err)
 			}
@@ -105,11 +111,18 @@ func main() {
 	}
 }
 
-func ProcessActiveDomains(ctx context.Context, conn *libvirt.Connect) error {
+func ProcessActiveDomains(ctx context.Context) error {
+	// Connecting to QEMU
+	conn, err := libvirt.NewConnect("qemu:///system")
+	if err != nil {
+		return fmt.Errorf("Failed to connect to QEMU", "error", err)
+	}
+	defer conn.Close()
+
 	// Running domains with memory stats
 	stats, err := conn.GetAllDomainStats(
 		[]*libvirt.Domain{},
-		libvirt.DOMAIN_STATS_BALLOON,
+		libvirt.DOMAIN_STATS_BALLOON|libvirt.DOMAIN_STATS_BLOCK,
 		libvirt.CONNECT_GET_ALL_DOMAINS_STATS_RUNNING,
 	)
 	if err != nil {
@@ -120,12 +133,12 @@ func ProcessActiveDomains(ctx context.Context, conn *libvirt.Connect) error {
 		return nil
 	}
 
-	nodeMemoryStats, err := mem.VirtualMemory()
+	nodeMemoryStats, err := mem.VirtualMemoryWithContext(ctx)
 	if err != nil {
 		return fmt.Errorf("Failed to get node memory stats: %v", err)
 	}
 
-	// // Getmemorystatus does not return the values SReclaimable and KReclaimable
+	// // GetMemoryStats does not return the values SReclaimable and KReclaimable
 	// nodeMemoryStats, err := conn.GetMemoryStats(libvirt.NODE_MEMORY_STATS_ALL_CELLS, 0)
 	// if err != nil {
 	// 	return fmt.Errorf("Failed to get node memory stats: %v", err)
@@ -142,14 +155,14 @@ func ProcessActiveDomains(ctx context.Context, conn *libvirt.Connect) error {
 			continue
 		}
 
-		go func(_stat libvirt.DomainStats) {
+		go func(_stat *libvirt.DomainStats) {
+			defer _stat.Domain.Free()
 			defer sem.Release(1)
 			err := ProcessDomain(_stat, nodeMemoryStats.UsedPercent)
 			if err != nil {
 				slog.Error("Error in ProcessDomain", "error", err)
 			}
-			_stat.Domain.Free()
-		}(stat)
+		}(&stat)
 	}
 	return nil
 }
@@ -166,7 +179,7 @@ func GetMetadata(domain *libvirt.Domain) *Metadata {
 	return &metadata
 }
 
-func ProcessDomain(stat libvirt.DomainStats, nodeMemoryUsedPercent float64) error {
+func ProcessDomain(stat *libvirt.DomainStats, nodeMemoryUsedPercent float64) error {
 
 	// // Maybe it's better this way... It's not clear yet
 	// memStats, err := stat.Domain.MemoryStats(13, 0)
@@ -185,6 +198,11 @@ func ProcessDomain(stat libvirt.DomainStats, nodeMemoryUsedPercent float64) erro
 	if err != nil {
 		return fmt.Errorf("Failed to get domain name: %v", err)
 	}
+
+	slog.Info(
+		domainName,
+		"block", stat.Block,
+	)
 
 	domainInfo, err := stat.Domain.GetInfo()
 	if err != nil {
@@ -237,7 +255,7 @@ func ProcessDomain(stat libvirt.DomainStats, nodeMemoryUsedPercent float64) erro
 	}
 
 	_, err = stat.Domain.QemuMonitorCommand(
-		fmt.Sprintf("balloon %d", newCurrent / 1024),
+		fmt.Sprintf("balloon %d", newCurrent/1024),
 		libvirt.DOMAIN_QEMU_MONITOR_COMMAND_HMP,
 	)
 	if err != nil {
@@ -258,7 +276,7 @@ func ProcessDomain(stat libvirt.DomainStats, nodeMemoryUsedPercent float64) erro
 }
 
 func GetChangeDirection(domainMemoryUsedPercent float64, nodeMemoryUsedPercent float64) int {
-	return int(domainMemoryUsedPercent - nodeMemoryUsedPercent) / cfg.Spread
+	return int(domainMemoryUsedPercent-nodeMemoryUsedPercent) / cfg.Spread
 }
 
 func IsMemoryStatsActual(lastUpdate uint64) bool {
