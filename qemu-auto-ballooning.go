@@ -12,18 +12,18 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/shirou/gopsutil/v4/mem"
 	"golang.org/x/sync/semaphore"
 	"libvirt.org/go/libvirt"
 )
 
 const (
-	configPath         string  = "/etc/qemu-auto-ballooning/qemu-auto-ballooning.conf"
-	parallelOperations int64   = 5 // number of parallel domains processed
-	frequencyDefault   int     = 5
-	changeDefault      float64 = 0.1 // 10% of current memory balloon
-	spreadDefault      int     = 10  // +-10%
-	metadataUriDefault string  = "http://controller/"
+	configPath                string  = "/etc/qemu-auto-ballooning/qemu-auto-ballooning.conf"
+	urlDefault                string  = "qemu:///system" // for remote - qemu+ssh://user@IP/system
+	parallelOperationsDefault int64   = 1                // number of parallel domains processed
+	frequencyDefault          int     = 5
+	changeDefault             float64 = 0.1 // 10% of current memory balloon
+	spreadDefault             int     = 10  // +-10%
+	metadataUriDefault        string  = "http://controller/"
 )
 
 var (
@@ -38,9 +38,11 @@ type Metadata struct {
 }
 
 type Config struct {
-	Frequency int     `json:"frequency"` // scan frequency of domains in seconds
-	Change    float64 `json:"change"`    // % of current memory balloon
-	Spread    int     `json:"spread"`    // the minimum acceptable spread (+%/-%) of memory usage values between the node and the VM
+	Url                string  `json:"url"`                 // hypervisor url
+	ParallelOperations int64   `json:"parallel_operations"` // number of parallel domains processed
+	Frequency          int     `json:"frequency"`           // main service frequency and guests balloon driver statistics collection period in seconds
+	Change             float64 `json:"change"`              // % of current memory balloon
+	Spread             int     `json:"spread"`              // the minimum acceptable spread (+%/-%) of memory usage values between the node and the VM
 }
 
 func LogMemoryStats() {
@@ -48,7 +50,6 @@ func LogMemoryStats() {
 	runtime.ReadMemStats(&m)
 	slog.Info("Memory stats",
 		"Alloc", m.Alloc,
-		"TotalAlloc", m.TotalAlloc,
 		"Sys", m.Sys,
 		"NumGC", m.NumGC,
 		"Goroutines", runtime.NumGoroutine(),
@@ -65,6 +66,12 @@ func LoadConfig() {
 			slog.Error("Failed to decode json in config file", "error", err)
 		}
 	}
+	if cfg.Url == "" {
+		cfg.Url = urlDefault
+	}
+	if cfg.ParallelOperations == 0 {
+		cfg.ParallelOperations = parallelOperationsDefault
+	}
 	if cfg.Frequency == 0 {
 		cfg.Frequency = frequencyDefault
 	}
@@ -77,10 +84,15 @@ func LoadConfig() {
 	slog.Info("Loaded", "config", cfg)
 }
 
+func TimeThis(start time.Time, name string) {
+	elapsed := time.Since(start)
+	slog.Info("TimeThis", name, elapsed)
+}
+
 func init() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	LoadConfig()
-	sem = semaphore.NewWeighted(parallelOperations)
+	sem = semaphore.NewWeighted(cfg.ParallelOperations)
 }
 
 func main() {
@@ -91,27 +103,26 @@ func main() {
 	)
 	defer cancel()
 
-	ticker := time.NewTicker(time.Duration(cfg.Frequency) * time.Second)
-	defer ticker.Stop()
-
 	slog.Info("Patrolling...")
-
 	for {
 		select {
 		case <-ctx.Done():
 			slog.Info("Stopped")
 			return
-		case <-ticker.C:
+		default:
 			// LogMemoryStats()
 			err := ProcessActiveDomains(ctx)
 			if err != nil {
 				slog.Error("Error in ProcessActiveDomains", "error", err)
 			}
 		}
+		time.Sleep(time.Duration(cfg.Frequency) * time.Second)
 	}
 }
 
 func ProcessActiveDomains(ctx context.Context) error {
+	// defer TimeThis(time.Now(), "ProcessActiveDomains")
+
 	// Connecting to QEMU
 	conn, err := libvirt.NewConnect("qemu:///system")
 	if err != nil {
@@ -129,42 +140,44 @@ func ProcessActiveDomains(ctx context.Context) error {
 		return fmt.Errorf("Failed to get active domains with memory stats: %v", err)
 	}
 
+	// No domains, no problems
 	if len(stats) == 0 {
 		return nil
 	}
 
-	nodeMemoryStats, err := mem.VirtualMemoryWithContext(ctx)
-	if err != nil {
-		return fmt.Errorf("Failed to get node memory stats: %v", err)
-	}
-
-	// // GetMemoryStats does not return the values SReclaimable and KReclaimable
-	// nodeMemoryStats, err := conn.GetMemoryStats(libvirt.NODE_MEMORY_STATS_ALL_CELLS, 0)
-	// if err != nil {
-	// 	return fmt.Errorf("Failed to get node memory stats: %v", err)
-	// }
-	// slog.Info("debug", "nodeMemoryStats", nodeMemoryStats)
-	// nodeMemoryAvailable := nodeMemoryStats.Free + nodeMemoryStats.Buffers + nodeMemoryStats.Cached
-	// nodeMemoryUsed := nodeMemoryStats.Total - nodeMemoryAvailable
-	// nodeMemoryUsedPercent := float64(nodeMemoryUsed) / float64(nodeMemoryStats.Total) * 100
-
 	for _, stat := range stats {
-		err = sem.Acquire(ctx, 1)
-		if err != nil {
-			slog.Error("Semaphore acquire failed", "error", err)
-			continue
-		}
-
-		go func(_stat *libvirt.DomainStats) {
-			defer _stat.Domain.Free()
-			defer sem.Release(1)
-			err := ProcessDomain(_stat, nodeMemoryStats.UsedPercent)
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+			err = sem.Acquire(ctx, 1)
 			if err != nil {
-				slog.Error("Error in ProcessDomain", "error", err)
+				continue
 			}
-		}(&stat)
+
+			go func(_stat *libvirt.DomainStats, _conn *libvirt.Connect) {
+				defer _stat.Domain.Free()
+				defer sem.Release(1)
+				err := ProcessDomain(_stat, _conn)
+				if err != nil {
+					slog.Error("Error in ProcessDomain", "error", err)
+				}
+			}(&stat, conn)
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 	return nil
+}
+
+func GetNodeMemoryUsedPercent(conn *libvirt.Connect) (float64, error) {
+	// GetMemoryStats does not return the values SReclaimable and KReclaimable
+	nodeMemoryStats, err := conn.GetMemoryStats(libvirt.NODE_MEMORY_STATS_ALL_CELLS, 0)
+	if err != nil {
+		return 0.0, fmt.Errorf("Failed to get node memory stats: %v", err)
+	}
+	nodeMemoryAvailable := nodeMemoryStats.Free + nodeMemoryStats.Buffers + nodeMemoryStats.Cached
+	nodeMemoryUsed := nodeMemoryStats.Total - nodeMemoryAvailable
+	return float64(nodeMemoryUsed) / float64(nodeMemoryStats.Total) * 100, nil
 }
 
 func GetMetadata(domain *libvirt.Domain) *Metadata {
@@ -179,14 +192,8 @@ func GetMetadata(domain *libvirt.Domain) *Metadata {
 	return &metadata
 }
 
-func ProcessDomain(stat *libvirt.DomainStats, nodeMemoryUsedPercent float64) error {
-
-	// // Maybe it's better this way... It's not clear yet
-	// memStats, err := stat.Domain.MemoryStats(13, 0)
-	// if err != nil {
-	// 	return fmt.Errorf("Failed to get domain memory stats: %v", err)
-	// }
-	// slog.Info("debug", "memStats", memStats)
+func ProcessDomain(stat *libvirt.DomainStats, conn *libvirt.Connect) error {
+	// defer TimeThis(time.Now(), "ProcessDomain")
 
 	domainMetadata := GetMetadata(stat.Domain)
 
@@ -194,7 +201,7 @@ func ProcessDomain(stat *libvirt.DomainStats, nodeMemoryUsedPercent float64) err
 		return nil
 	}
 
-	if stat.Vcpu[0].Time < 20000000000 { // 20s of Vcpu for domain boot
+	if stat.Vcpu[0].Time < 30000000000 { // 30s of Vcpu for domain boot
 		return nil
 	}
 
@@ -209,6 +216,11 @@ func ProcessDomain(stat *libvirt.DomainStats, nodeMemoryUsedPercent float64) err
 			return fmt.Errorf("Failed to set domains (%s) memory stats period: %v", domainName, err)
 		}
 		return nil
+	}
+
+	nodeMemoryUsedPercent, err := GetNodeMemoryUsedPercent(conn)
+	if err != nil {
+		return err
 	}
 
 	domainMemoryUsed := stat.Balloon.Available - stat.Balloon.Usable
