@@ -103,6 +103,8 @@ func main() {
 	)
 	defer cancel()
 
+	frequency := time.Duration(cfg.Frequency) * time.Second // nanoseconds
+
 	slog.Info("Patrolling...")
 	for {
 		select {
@@ -111,12 +113,16 @@ func main() {
 			return
 		default:
 			// LogMemoryStats()
+			start := time.Now()
 			err := ProcessActiveDomains(ctx)
 			if err != nil {
 				slog.Error("Error in ProcessActiveDomains", "error", err)
 			}
+			elapsed := time.Since(start)
+			if elapsed < frequency {
+				time.Sleep(frequency - elapsed)
+			}
 		}
-		time.Sleep(time.Duration(cfg.Frequency) * time.Second)
 	}
 }
 
@@ -164,7 +170,7 @@ func ProcessActiveDomains(ctx context.Context) error {
 				}
 			}(&stat, conn)
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 	}
 	return nil
 }
