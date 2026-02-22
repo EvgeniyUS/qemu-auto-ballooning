@@ -21,6 +21,7 @@ const (
 	urlDefault                string  = "qemu:///system" // for remote - qemu+ssh://user@IP/system
 	parallelOperationsDefault int64   = 1                // number of parallel domains processed
 	operationsDelayDefault    int64   = 500              // milliseconds
+	vcpuTimeDefault           int64   = 40               // seconds
 	frequencyDefault          int     = 5                // seconds
 	changeDefault             float64 = 0.1              // 10% of current memory balloon
 	spreadDefault             int     = 10               // +-10%
@@ -28,8 +29,10 @@ const (
 )
 
 var (
-	sem *semaphore.Weighted
-	cfg Config
+	sem       *semaphore.Weighted
+	cfg       Config
+	frequency time.Duration
+	vcpuTime  time.Duration
 )
 
 type Metadata struct {
@@ -42,6 +45,7 @@ type Config struct {
 	Url                string  `json:"url"`                 // hypervisor url
 	ParallelOperations int64   `json:"parallel_operations"` // number of parallel domains processed
 	OperationsDelay    int64   `json:"operations_delay"`    // waiting after processing one domain in milliseconds
+	VcpuTime           int64   `json:"vcpu_time"`           // Vcpu time for domain boot in seconds
 	Frequency          int     `json:"frequency"`           // main service frequency and guests balloon driver statistics collection period in seconds
 	Change             float64 `json:"change"`              // % of current memory balloon
 	Spread             int     `json:"spread"`              // the minimum acceptable spread (+%/-%) of memory usage values between the node and the VM
@@ -77,6 +81,9 @@ func LoadConfig() {
 	if cfg.OperationsDelay == 0 {
 		cfg.OperationsDelay = operationsDelayDefault
 	}
+	if cfg.VcpuTime == 0 {
+		cfg.VcpuTime = vcpuTimeDefault
+	}
 	if cfg.Frequency == 0 {
 		cfg.Frequency = frequencyDefault
 	}
@@ -98,6 +105,7 @@ func init() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	LoadConfig()
 	sem = semaphore.NewWeighted(cfg.ParallelOperations)
+	vcpuTime = time.Duration(cfg.VcpuTime) * time.Second // nanoseconds
 }
 
 func main() {
@@ -108,7 +116,7 @@ func main() {
 	)
 	defer cancel()
 
-	frequency := time.Duration(cfg.Frequency) * time.Second // nanoseconds
+	frequency = time.Duration(cfg.Frequency) * time.Second // nanoseconds
 
 	slog.Info("Patrolling...")
 	for {
@@ -193,7 +201,7 @@ func ProcessDomain(domain *libvirt.Domain, conn *libvirt.Connect) error {
 	}
 	defer domainStats[0].Domain.Free()
 
-	if domainStats[0].Vcpu[0].Time < 40000000000 { // 40s of Vcpu for domain boot
+	if domainStats[0].Vcpu[0].Time < uint64(vcpuTime) {
 		return nil
 	}
 
