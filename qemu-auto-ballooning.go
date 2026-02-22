@@ -20,9 +20,10 @@ const (
 	configPath                string  = "/etc/qemu-auto-ballooning/qemu-auto-ballooning.conf"
 	urlDefault                string  = "qemu:///system" // for remote - qemu+ssh://user@IP/system
 	parallelOperationsDefault int64   = 1                // number of parallel domains processed
-	frequencyDefault          int     = 5
-	changeDefault             float64 = 0.1 // 10% of current memory balloon
-	spreadDefault             int     = 10  // +-10%
+	operationsDelayDefault    int64   = 500              // milliseconds
+	frequencyDefault          int     = 5                // seconds
+	changeDefault             float64 = 0.1              // 10% of current memory balloon
+	spreadDefault             int     = 10               // +-10%
 	metadataUriDefault        string  = "http://controller/"
 )
 
@@ -40,6 +41,7 @@ type Metadata struct {
 type Config struct {
 	Url                string  `json:"url"`                 // hypervisor url
 	ParallelOperations int64   `json:"parallel_operations"` // number of parallel domains processed
+	OperationsDelay    int64   `json:"operations_delay"`    // waiting after processing one domain in milliseconds
 	Frequency          int     `json:"frequency"`           // main service frequency and guests balloon driver statistics collection period in seconds
 	Change             float64 `json:"change"`              // % of current memory balloon
 	Spread             int     `json:"spread"`              // the minimum acceptable spread (+%/-%) of memory usage values between the node and the VM
@@ -71,6 +73,9 @@ func LoadConfig() {
 	}
 	if cfg.ParallelOperations == 0 {
 		cfg.ParallelOperations = parallelOperationsDefault
+	}
+	if cfg.OperationsDelay == 0 {
+		cfg.OperationsDelay = operationsDelayDefault
 	}
 	if cfg.Frequency == 0 {
 		cfg.Frequency = frequencyDefault
@@ -163,8 +168,8 @@ func ProcessActiveDomains(ctx context.Context) error {
 					slog.Error("Error in ProcessDomain", "error", err)
 				}
 			}(&domain, conn)
+			time.Sleep(time.Duration(cfg.OperationsDelay) * time.Millisecond)
 		}
-		time.Sleep(500 * time.Millisecond)
 	}
 	return nil
 }
@@ -182,9 +187,13 @@ func ProcessDomain(domain *libvirt.Domain, conn *libvirt.Connect) error {
 	if err != nil {
 		return err
 	}
-	defer domainStats.Domain.Free()
+	if len(domainStats) == 0 {
+		// most likely, domain changed its status after ListAllDomains
+		return nil
+	}
+	defer domainStats[0].Domain.Free()
 
-	if domainStats.Vcpu[0].Time < 30000000000 { // 30s of Vcpu for domain boot
+	if domainStats[0].Vcpu[0].Time < 40000000000 { // 40s of Vcpu for domain boot
 		return nil
 	}
 
@@ -193,7 +202,7 @@ func ProcessDomain(domain *libvirt.Domain, conn *libvirt.Connect) error {
 		return fmt.Errorf("Failed to get domain name: %v", err)
 	}
 
-	if !IsMemoryStatsActual(domainStats.Balloon.LastUpdate) {
+	if !IsMemoryStatsActual(domainStats[0].Balloon.LastUpdate) {
 		err = domain.SetMemoryStatsPeriod(cfg.Frequency, libvirt.DOMAIN_MEM_LIVE)
 		if err != nil {
 			return fmt.Errorf("Failed to set domains (%s) memory stats period: %v", domainName, err)
@@ -206,21 +215,21 @@ func ProcessDomain(domain *libvirt.Domain, conn *libvirt.Connect) error {
 		return err
 	}
 
-	domainMemoryUsed := domainStats.Balloon.Available - domainStats.Balloon.Usable
-	domainMemoryUsedPercent := float64(domainMemoryUsed) / float64(domainStats.Balloon.Available) * 100
+	domainMemoryUsed := domainStats[0].Balloon.Available - domainStats[0].Balloon.Usable
+	domainMemoryUsedPercent := float64(domainMemoryUsed) / float64(domainStats[0].Balloon.Available) * 100
 	changeDirection := GetChangeDirection(domainMemoryUsedPercent, nodeMemoryUsedPercent)
 
 	if changeDirection == 0 {
 		return nil
 	}
 
-	changeAmount := float64(domainStats.Balloon.Current) * cfg.Change * float64(changeDirection)
-	newCurrent := uint64(float64(domainStats.Balloon.Current) + changeAmount)
+	changeAmount := float64(domainStats[0].Balloon.Current) * cfg.Change * float64(changeDirection)
+	newCurrent := uint64(float64(domainStats[0].Balloon.Current) + changeAmount)
 
-	if newCurrent > domainStats.Balloon.Maximum {
-		if domainStats.Balloon.Current < domainStats.Balloon.Maximum {
-			newCurrent = domainStats.Balloon.Maximum
-			changeAmount = float64(newCurrent - domainStats.Balloon.Current)
+	if newCurrent > domainStats[0].Balloon.Maximum {
+		if domainStats[0].Balloon.Current < domainStats[0].Balloon.Maximum {
+			newCurrent = domainStats[0].Balloon.Maximum
+			changeAmount = float64(newCurrent - domainStats[0].Balloon.Current)
 		} else {
 			return nil
 		}
@@ -231,9 +240,9 @@ func ProcessDomain(domain *libvirt.Domain, conn *libvirt.Connect) error {
 	}
 
 	if newCurrent < domainMetadata.MemoryMinGuarantee {
-		if domainStats.Balloon.Current > domainMetadata.MemoryMinGuarantee {
+		if domainStats[0].Balloon.Current > domainMetadata.MemoryMinGuarantee {
 			newCurrent = domainMetadata.MemoryMinGuarantee
-			changeAmount = float64(domainStats.Balloon.Current - newCurrent)
+			changeAmount = float64(domainStats[0].Balloon.Current - newCurrent)
 		} else {
 			return nil
 		}
@@ -250,7 +259,7 @@ func ProcessDomain(domain *libvirt.Domain, conn *libvirt.Connect) error {
 			domainName,
 			"change", int(changeAmount),
 			"current", newCurrent,
-			"maximum", domainStats.Balloon.Maximum,
+			"maximum", domainStats[0].Balloon.Maximum,
 			"used", domainMemoryUsed,
 			"minGuarantee", domainMetadata.MemoryMinGuarantee,
 			"domainMemoryUsedPercent", int(domainMemoryUsedPercent),
@@ -260,7 +269,7 @@ func ProcessDomain(domain *libvirt.Domain, conn *libvirt.Connect) error {
 	return nil
 }
 
-func GetDomainStats(domain *libvirt.Domain, conn *libvirt.Connect) (libvirt.DomainStats, error) {
+func GetDomainStats(domain *libvirt.Domain, conn *libvirt.Connect) ([]libvirt.DomainStats, error) {
 	var domains []*libvirt.Domain
 	domains = append(domains, domain)
 	stats, err := conn.GetAllDomainStats(
@@ -269,9 +278,9 @@ func GetDomainStats(domain *libvirt.Domain, conn *libvirt.Connect) (libvirt.Doma
 		libvirt.CONNECT_GET_ALL_DOMAINS_STATS_RUNNING,
 	)
 	if err != nil {
-		return libvirt.DomainStats{}, fmt.Errorf("Failed to get domain stats: %v", err)
+		return stats, fmt.Errorf("Failed to get domain stats: %v", err)
 	}
-	return stats[0], nil
+	return stats, nil
 }
 
 func GetNodeMemoryUsedPercent(conn *libvirt.Connect) (float64, error) {
