@@ -29,10 +29,9 @@ const (
 )
 
 var (
-	sem       *semaphore.Weighted
-	cfg       Config
-	frequency time.Duration
-	vcpuTime  time.Duration
+	sem      *semaphore.Weighted
+	cfg      Config
+	vcpuTime uint64
 )
 
 type Metadata struct {
@@ -105,7 +104,7 @@ func init() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	LoadConfig()
 	sem = semaphore.NewWeighted(cfg.ParallelOperations)
-	vcpuTime = time.Duration(cfg.VcpuTime) * time.Second // nanoseconds
+	vcpuTime = uint64(time.Duration(cfg.VcpuTime) * time.Second) // nanoseconds
 }
 
 func main() {
@@ -116,7 +115,7 @@ func main() {
 	)
 	defer cancel()
 
-	frequency = time.Duration(cfg.Frequency) * time.Second // nanoseconds
+	frequency := time.Duration(cfg.Frequency) * time.Second // nanoseconds
 
 	slog.Info("Patrolling...")
 	for {
@@ -201,7 +200,7 @@ func ProcessDomain(domain *libvirt.Domain, conn *libvirt.Connect) error {
 	}
 	defer domainStats[0].Domain.Free()
 
-	if domainStats[0].Vcpu[0].Time < uint64(vcpuTime) {
+	if domainStats[0].Vcpu[0].Time < vcpuTime {
 		return nil
 	}
 
