@@ -135,7 +135,7 @@ func ProcessActiveDomains(ctx context.Context) error {
 	// defer TimeThis(time.Now(), "ProcessActiveDomains")
 
 	// Connecting to QEMU
-	conn, err := libvirt.NewConnect("qemu:///system")
+	conn, err := libvirt.NewConnect(cfg.Url)
 	if err != nil {
 		return fmt.Errorf("Failed to connect to QEMU", "error", err)
 	}
