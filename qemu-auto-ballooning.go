@@ -22,16 +22,17 @@ const (
 	parallelOperationsDefault int64   = 1                // number of parallel domains processed
 	operationsDelayDefault    int64   = 500              // milliseconds
 	vcpuTimeDefault           int64   = 40               // seconds
-	frequencyDefault          int     = 5                // seconds
+	frequencyDefault          int64   = 5                // seconds
 	changeDefault             float64 = 0.1              // 10% of current memory balloon
 	spreadDefault             int     = 10               // +-10%
 	metadataUriDefault        string  = "http://controller/"
 )
 
 var (
-	sem      *semaphore.Weighted
-	cfg      Config
-	vcpuTime uint64
+	sem             *semaphore.Weighted
+	cfg             Config
+	operationsDelay time.Duration
+	vcpuTime        uint64
 )
 
 type Metadata struct {
@@ -45,7 +46,7 @@ type Config struct {
 	ParallelOperations int64   `json:"parallel_operations"` // number of parallel domains processed
 	OperationsDelay    int64   `json:"operations_delay"`    // waiting after processing one domain in milliseconds
 	VcpuTime           int64   `json:"vcpu_time"`           // Vcpu time for domain boot in seconds
-	Frequency          int     `json:"frequency"`           // main service frequency and guests balloon driver statistics collection period in seconds
+	Frequency          int64   `json:"frequency"`           // main service frequency and guests balloon driver statistics collection period in seconds
 	Change             float64 `json:"change"`              // % of current memory balloon
 	Spread             int     `json:"spread"`              // the minimum acceptable spread (+%/-%) of memory usage values between the node and the VM
 }
@@ -104,7 +105,8 @@ func init() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	LoadConfig()
 	sem = semaphore.NewWeighted(cfg.ParallelOperations)
-	vcpuTime = uint64(time.Duration(cfg.VcpuTime) * time.Second) // nanoseconds
+	operationsDelay = time.Duration(cfg.OperationsDelay) * time.Millisecond // nanoseconds
+	vcpuTime = uint64(time.Duration(cfg.VcpuTime) * time.Second)            // nanoseconds
 }
 
 func main() {
@@ -174,7 +176,7 @@ func ProcessActiveDomains(ctx context.Context) error {
 					slog.Error("Error in ProcessDomain", "error", err)
 				}
 			}(&domain, conn)
-			time.Sleep(time.Duration(cfg.OperationsDelay) * time.Millisecond)
+			time.Sleep(operationsDelay)
 		}
 	}
 	return nil
@@ -209,7 +211,7 @@ func ProcessDomain(domain *libvirt.Domain, conn *libvirt.Connect) error {
 	}
 
 	if !IsMemoryStatsActual(domainStats[0].Balloon.LastUpdate) {
-		err = domain.SetMemoryStatsPeriod(cfg.Frequency, libvirt.DOMAIN_MEM_LIVE)
+		err = domain.SetMemoryStatsPeriod(int(cfg.Frequency), libvirt.DOMAIN_MEM_LIVE)
 		if err != nil {
 			return fmt.Errorf("Failed to set domain (%s) memory stats period: %v", domainName, err)
 		}
@@ -317,7 +319,5 @@ func GetChangeDirection(domainMemoryUsedPercent float64, nodeMemoryUsedPercent f
 }
 
 func IsMemoryStatsActual(lastUpdate uint64) bool {
-	maxAgeSeconds := int64(cfg.Frequency)
-	now := time.Now().Unix()
-	return (now - int64(lastUpdate)) <= maxAgeSeconds
+	return (time.Now().Unix() - int64(lastUpdate)) <= cfg.Frequency
 }
