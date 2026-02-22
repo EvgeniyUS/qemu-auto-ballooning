@@ -141,10 +141,9 @@ func main() {
 func ProcessActiveDomains(ctx context.Context) error {
 	// defer TimeThis(time.Now(), "ProcessActiveDomains")
 
-	// Connecting to QEMU
 	conn, err := libvirt.NewConnect(cfg.Url)
 	if err != nil {
-		return fmt.Errorf("Failed to connect to QEMU", "error", err)
+		return fmt.Errorf("Failed to connect to hypervisor", "error", err)
 	}
 	defer conn.Close()
 
@@ -190,9 +189,14 @@ func ProcessDomain(domain *libvirt.Domain, conn *libvirt.Connect) error {
 		return nil
 	}
 
+	domainName, err := domain.GetName()
+	if err != nil {
+		return fmt.Errorf("Failed to get domain name: %v", err)
+	}
+
 	domainStats, err := GetDomainStats(domain, conn)
 	if err != nil {
-		return err
+		return fmt.Errorf("Failed to get domain (%s) stats: %v", domainName, err)
 	}
 	if len(domainStats) == 0 {
 		// most likely, domain changed its status after ListAllDomains
@@ -204,15 +208,10 @@ func ProcessDomain(domain *libvirt.Domain, conn *libvirt.Connect) error {
 		return nil
 	}
 
-	domainName, err := domain.GetName()
-	if err != nil {
-		return fmt.Errorf("Failed to get domain name: %v", err)
-	}
-
 	if !IsMemoryStatsActual(domainStats[0].Balloon.LastUpdate) {
 		err = domain.SetMemoryStatsPeriod(cfg.Frequency, libvirt.DOMAIN_MEM_LIVE)
 		if err != nil {
-			return fmt.Errorf("Failed to set domains (%s) memory stats period: %v", domainName, err)
+			return fmt.Errorf("Failed to set domain (%s) memory stats period: %v", domainName, err)
 		}
 		return nil
 	}
@@ -260,7 +259,7 @@ func ProcessDomain(domain *libvirt.Domain, conn *libvirt.Connect) error {
 		libvirt.DOMAIN_QEMU_MONITOR_COMMAND_HMP,
 	)
 	if err != nil {
-		return fmt.Errorf("Failed to change domains (%s) memory balloon: %v", domainName, err)
+		return fmt.Errorf("Failed to change domain (%s) memory balloon: %v", domainName, err)
 	} else {
 		slog.Info(
 			domainName,
@@ -285,7 +284,7 @@ func GetDomainStats(domain *libvirt.Domain, conn *libvirt.Connect) ([]libvirt.Do
 		libvirt.CONNECT_GET_ALL_DOMAINS_STATS_RUNNING,
 	)
 	if err != nil {
-		return stats, fmt.Errorf("Failed to get domain stats: %v", err)
+		return stats, err
 	}
 	return stats, nil
 }
