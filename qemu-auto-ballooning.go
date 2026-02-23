@@ -220,7 +220,7 @@ func ProcessDomain(domain *libvirt.Domain, conn *libvirt.Connect) error {
 
 	nodeMemoryUsedPercent, err := GetNodeMemoryUsedPercent(conn)
 	if err != nil {
-		return err
+		return fmt.Errorf("Failed to get node memory stats while processing domain (%s): %v", domainName, err)
 	}
 
 	domainMemoryUsed := domainStats[0].Balloon.Available - domainStats[0].Balloon.Usable
@@ -295,7 +295,7 @@ func GetNodeMemoryUsedPercent(conn *libvirt.Connect) (float64, error) {
 	// GetMemoryStats does not return the values SReclaimable and KReclaimable
 	nodeMemoryStats, err := conn.GetMemoryStats(libvirt.NODE_MEMORY_STATS_ALL_CELLS, 0)
 	if err != nil {
-		return 0.0, fmt.Errorf("Failed to get node memory stats: %v", err)
+		return 0.0, err
 	}
 	nodeMemoryAvailable := nodeMemoryStats.Free + nodeMemoryStats.Buffers + nodeMemoryStats.Cached
 	nodeMemoryUsed := nodeMemoryStats.Total - nodeMemoryAvailable
