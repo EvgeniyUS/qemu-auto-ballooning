@@ -225,7 +225,7 @@ func ProcessDomain(domain *libvirt.Domain, conn *libvirt.Connect) error {
 
 	domainMemoryUsed := domainStats[0].Balloon.Available - domainStats[0].Balloon.Usable
 	domainMemoryUsedPercent := float64(domainMemoryUsed) / float64(domainStats[0].Balloon.Available) * 100
-	changeDirection := GetChangeDirection(domainMemoryUsedPercent, nodeMemoryUsedPercent)
+	changeDirection := int(domainMemoryUsedPercent-nodeMemoryUsedPercent) / cfg.Spread
 
 	if changeDirection == 0 {
 		return nil
@@ -312,10 +312,6 @@ func GetMetadata(domain *libvirt.Domain) *Metadata {
 	xml.Unmarshal([]byte(xmlData), &metadata)
 	metadata.MemoryMinGuarantee *= 1024
 	return &metadata
-}
-
-func GetChangeDirection(domainMemoryUsedPercent float64, nodeMemoryUsedPercent float64) int {
-	return int(domainMemoryUsedPercent-nodeMemoryUsedPercent) / cfg.Spread
 }
 
 func IsMemoryStatsActual(lastUpdate uint64) bool {
