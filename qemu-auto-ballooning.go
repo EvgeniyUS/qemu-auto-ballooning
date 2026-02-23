@@ -18,14 +18,14 @@ import (
 
 const (
 	configPath                string  = "/etc/qemu-auto-ballooning/qemu-auto-ballooning.conf"
-	urlDefault                string  = "qemu:///system" // for remote - qemu+ssh://user@IP/system
-	parallelOperationsDefault int64   = 1                // number of parallel domains processed
-	operationsDelayDefault    int64   = 500              // milliseconds
-	vcpuTimeDefault           int64   = 40               // seconds
-	frequencyDefault          int64   = 5                // seconds
-	changeDefault             float64 = 0.1              // 10% of current memory balloon
-	spreadDefault             int     = 10               // +-10%
-	metadataUriDefault        string  = "http://controller/"
+	urlDefault                string  = "qemu:///system"     // for remote - qemu+ssh://user@IP/system
+	parallelOperationsDefault int64   = 1                    // number of parallel domains processed
+	operationsDelayDefault    int64   = 500                  // milliseconds
+	vcpuTimeDefault           int64   = 40                   // seconds
+	frequencyDefault          int64   = 5                    // seconds
+	changeDefault             float64 = 0.1                  // 10% of current memory balloon
+	spreadDefault             int     = 10                   // +-10%
+	metadataUriDefault        string  = "http://controller/" // SpaceVM metadata uri
 )
 
 var (
@@ -37,8 +37,8 @@ var (
 
 type Metadata struct {
 	XMLName            xml.Name `xml:"instance"`
-	Safety             bool     `xml:"safety"`
-	MemoryMinGuarantee uint64   `xml:"memory_min_guarantee"`
+	Safety             bool     `xml:"safety"`               // SpaceVM flag means that domain's memory is protected and should not be modified
+	MemoryMinGuarantee uint64   `xml:"memory_min_guarantee"` // SpaceVM flag means minimum domain's memory
 }
 
 type Config struct {
