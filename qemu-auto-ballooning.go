@@ -6,35 +6,41 @@ import (
 	"log/slog"
 	"os"
 
+	"qemu-auto-ballooning/config"
 	"qemu-auto-ballooning/monitor"
 	"qemu-auto-ballooning/service"
 )
 
 var (
-	flagRun     bool
-	flagMonitor bool
-	flagHelp    bool
+	flagRun      bool
+	flagMonitor  bool
+	flagLogLevel int
+	flagHelp     bool
+	flagConfig   bool
 )
 
 func DefineFlags() {
 	flag.BoolVar(&flagRun, "r", false, "Run QEMU Auto ballooning service")
 	flag.BoolVar(&flagMonitor, "m", false, "Run QEMU balloon monitor")
+	flag.IntVar(&flagLogLevel, "l", 0, "Debug = -4, Info = 0, Warn = 4, Error = 8")
 	flag.BoolVar(&flagHelp, "h", false, "Show this help")
+	flag.BoolVar(&flagConfig, "c", false, "Show config")
 }
 
 func init() {
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	DefineFlags()
 	flag.Parse()
+	h := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.Level(flagLogLevel)})
+	slog.SetDefault(slog.New(h))
 }
 
 func main() {
 	if flagRun {
-		// slog.Info("debug", "flagRun", flagRun)
 		service.Run()
 	} else if flagMonitor {
-		// slog.Info("debug", "flagMonitor", flagMonitor)
 		monitor.Run()
+	} else if flagConfig {
+		config.Print()
 	} else if flagHelp {
 		PrintHelp()
 	} else {

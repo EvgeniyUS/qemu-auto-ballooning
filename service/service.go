@@ -13,7 +13,7 @@ import (
 	"libvirt.org/go/libvirt"
 
 	"qemu-auto-ballooning/config"
-	// "qemu-auto-ballooning/utils"
+	"qemu-auto-ballooning/utils"
 )
 
 const (
@@ -25,6 +25,7 @@ var (
 	cfg             config.Config
 	operationsDelay time.Duration
 	vcpuTime        uint64
+	debug           bool
 )
 
 type Metadata struct {
@@ -34,11 +35,14 @@ type Metadata struct {
 }
 
 func Run() {
+	debug = utils.IsDebug()
+
 	err := config.Load(&cfg)
 	if err != nil {
 		slog.Error("Error in config.Load", "error", err)
+		return
 	}
-	slog.Info("debug", "cfg", cfg)
+	slog.Info("Loaded", "config", cfg)
 
 	sem = semaphore.NewWeighted(cfg.ParallelOperations)
 	operationsDelay = time.Duration(cfg.OperationsDelay) * time.Millisecond // nanoseconds
@@ -60,7 +64,9 @@ func Run() {
 			slog.Info("Stopped")
 			return
 		default:
-			// utils.LogMemoryStats()
+			if debug {
+				utils.LogMemoryStats()
+			}
 			start := time.Now()
 			err := ProcessActiveDomains(ctx)
 			if err != nil {
@@ -75,7 +81,9 @@ func Run() {
 }
 
 func ProcessActiveDomains(ctx context.Context) error {
-	// defer utils.TimeThis(time.Now(), "ProcessActiveDomains")
+	if debug {
+		defer utils.TimeThis(time.Now(), "ProcessActiveDomains")
+	}
 
 	conn, err := libvirt.NewConnect(cfg.Url)
 	if err != nil {
@@ -117,7 +125,9 @@ func ProcessActiveDomains(ctx context.Context) error {
 }
 
 func ProcessDomain(domain *libvirt.Domain, conn *libvirt.Connect) error {
-	// defer utils.TimeThis(time.Now(), "ProcessDomain")
+	if debug {
+		defer utils.TimeThis(time.Now(), "ProcessDomain")
+	}
 
 	domainMetadata := GetMetadata(domain)
 

@@ -3,7 +3,6 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 )
 
@@ -60,6 +59,18 @@ func Load(cfg *Config) error {
 	if cfg.Spread == 0 {
 		cfg.Spread = spreadDefault
 	}
-	slog.Info("Loaded", "config", cfg)
 	return nil
+}
+
+func Print() {
+	var cfg Config
+	Load(&cfg)
+	fmt.Printf("Config file (%s):\n\n", configPath)
+	fmt.Printf("Url: %s\n", cfg.Url)
+	fmt.Printf("ParallelOperations: %d\n", cfg.ParallelOperations)
+	fmt.Printf("OperationsDelay: %d ms\n", cfg.OperationsDelay)
+	fmt.Printf("VcpuTime: %d s\n", cfg.VcpuTime)
+	fmt.Printf("Frequency: %d s\n", cfg.Frequency)
+	fmt.Printf("Change: %f\n", cfg.Change)
+	fmt.Printf("Spread: %d\n", cfg.Spread)
 }
