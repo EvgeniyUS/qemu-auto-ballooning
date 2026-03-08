@@ -2,35 +2,27 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"log/slog"
-	"os"
 	"os/signal"
-	"runtime"
 	"syscall"
 	"time"
 
 	"golang.org/x/sync/semaphore"
 	"libvirt.org/go/libvirt"
+
+	"qemu-auto-ballooning/config"
+	// "qemu-auto-ballooning/utils"
 )
 
 const (
-	configPath                string  = "/etc/qemu-auto-ballooning/qemu-auto-ballooning.conf"
-	urlDefault                string  = "qemu:///system"     // for remote - qemu+ssh://user@IP/system
-	parallelOperationsDefault int64   = 1                    // number of parallel domains processed
-	operationsDelayDefault    int64   = 500                  // milliseconds
-	vcpuTimeDefault           int64   = 40                   // seconds
-	frequencyDefault          int64   = 5                    // seconds
-	changeDefault             float64 = 0.1                  // 10% of current memory balloon
-	spreadDefault             int     = 10                   // +-10%
-	metadataUriDefault        string  = "http://controller/" // SpaceVM metadata uri
+	metadataUriDefault string = "http://controller/" // SpaceVM metadata uri
 )
 
 var (
 	sem             *semaphore.Weighted
-	cfg             Config
+	cfg             config.Config
 	operationsDelay time.Duration
 	vcpuTime        uint64
 )
@@ -41,72 +33,12 @@ type Metadata struct {
 	MemoryMinGuarantee uint64   `xml:"memory_min_guarantee"` // SpaceVM flag means minimum domain's memory
 }
 
-type Config struct {
-	Url                string  `json:"url"`                 // hypervisor url
-	ParallelOperations int64   `json:"parallel_operations"` // number of parallel domains processed
-	OperationsDelay    int64   `json:"operations_delay"`    // waiting after processing one domain in milliseconds
-	VcpuTime           int64   `json:"vcpu_time"`           // Vcpu time for domain boot in seconds
-	Frequency          int64   `json:"frequency"`           // main service frequency and guests balloon driver statistics collection period in seconds
-	Change             float64 `json:"change"`              // % of current memory balloon
-	Spread             int     `json:"spread"`              // the minimum acceptable spread (+%/-%) of memory usage values between the node and the VM
-}
-
-func LogMemoryStats() {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	slog.Info("Memory stats",
-		"Alloc", m.Alloc,
-		"Sys", m.Sys,
-		"NumGC", m.NumGC,
-		"Goroutines", runtime.NumGoroutine(),
-	)
-}
-
-func LoadConfig() {
-	fileBytes, err := os.ReadFile(configPath)
-	if err != nil {
-		slog.Error("Failed to open config file", "error", err)
-	} else {
-		err = json.Unmarshal(fileBytes, &cfg)
-		if err != nil {
-			slog.Error("Failed to decode json in config file", "error", err)
-		}
-	}
-	if cfg.Url == "" {
-		cfg.Url = urlDefault
-	}
-	if cfg.ParallelOperations == 0 {
-		cfg.ParallelOperations = parallelOperationsDefault
-	}
-	if cfg.OperationsDelay == 0 {
-		cfg.OperationsDelay = operationsDelayDefault
-	}
-	if cfg.VcpuTime == 0 {
-		cfg.VcpuTime = vcpuTimeDefault
-	}
-	if cfg.Frequency == 0 {
-		cfg.Frequency = frequencyDefault
-	}
-	if cfg.Change == 0 {
-		cfg.Change = changeDefault
-	}
-	if cfg.Spread == 0 {
-		cfg.Spread = spreadDefault
-	}
-	slog.Info("Loaded", "config", cfg)
-}
-
-func TimeThis(start time.Time, name string) {
-	elapsed := time.Since(start)
-	slog.Info("TimeThis", name, elapsed)
-}
-
-// func init() {
-// 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
-// }
-
 func Run() {
-	LoadConfig()
+	err := config.Load(&cfg)
+	if err != nil {
+		slog.Error("Error in config.Load", "error", err)
+	}
+	slog.Info("debug", "cfg", cfg)
 
 	sem = semaphore.NewWeighted(cfg.ParallelOperations)
 	operationsDelay = time.Duration(cfg.OperationsDelay) * time.Millisecond // nanoseconds
@@ -128,7 +60,7 @@ func Run() {
 			slog.Info("Stopped")
 			return
 		default:
-			// LogMemoryStats()
+			// utils.LogMemoryStats()
 			start := time.Now()
 			err := ProcessActiveDomains(ctx)
 			if err != nil {
@@ -143,7 +75,7 @@ func Run() {
 }
 
 func ProcessActiveDomains(ctx context.Context) error {
-	// defer TimeThis(time.Now(), "ProcessActiveDomains")
+	// defer utils.TimeThis(time.Now(), "ProcessActiveDomains")
 
 	conn, err := libvirt.NewConnect(cfg.Url)
 	if err != nil {
@@ -185,7 +117,7 @@ func ProcessActiveDomains(ctx context.Context) error {
 }
 
 func ProcessDomain(domain *libvirt.Domain, conn *libvirt.Connect) error {
-	// defer TimeThis(time.Now(), "ProcessDomain")
+	// defer utils.TimeThis(time.Now(), "ProcessDomain")
 
 	domainMetadata := GetMetadata(domain)
 
