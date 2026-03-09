@@ -110,14 +110,14 @@ func ProcessActiveDomains(ctx context.Context) error {
 				continue
 			}
 
-			go func(_domain *libvirt.Domain, _conn *libvirt.Connect) {
-				defer _domain.Free()
+			go func() {
+				defer domain.Free()
 				defer sem.Release(1)
-				err := ProcessDomain(_domain, _conn)
+				err := ProcessDomain(&domain, conn)
 				if err != nil {
 					slog.Error("Error in ProcessDomain", "error", err)
 				}
-			}(&domain, conn)
+			}()
 			time.Sleep(operationsDelay)
 		}
 	}
