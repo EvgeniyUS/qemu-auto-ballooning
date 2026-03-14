@@ -80,21 +80,31 @@ func Run() {
 	}
 }
 
-func ProcessActiveDomains(ctx context.Context) error {
-	if debug {
-		defer utils.TimeThis(time.Now(), "ProcessActiveDomains")
-	}
-
+func ListAllDomains() (*libvirt.Connect, []libvirt.Domain, error) {
 	conn, err := libvirt.NewConnect(cfg.Url)
 	if err != nil {
-		return fmt.Errorf("Failed to connect to hypervisor", "error", err)
+		return nil, nil, fmt.Errorf("Failed to connect to hypervisor", "error", err)
 	}
 	defer conn.Close()
 
 	domains, err := conn.ListAllDomains(libvirt.CONNECT_LIST_DOMAINS_RUNNING)
 	if err != nil {
-		return fmt.Errorf("Failed to get active domains: %v", err)
+		return nil, nil, fmt.Errorf("Failed to get active domains: %v", err)
 	}
+	return conn, domains, nil
+}
+
+func ProcessActiveDomains(ctx context.Context) error {
+	if debug {
+		defer utils.TimeThis(time.Now(), "ProcessActiveDomains")
+	}
+
+	conn, domains, err := ListAllDomains()
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
 	if len(domains) == 0 {
 		// No domains, no problems
 		return nil
