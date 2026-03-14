@@ -112,7 +112,7 @@ func updateData(table *tview.Table) {
 		table.SetCell(n+1, 6, tview.NewTableCell(fmt.Sprintf("%d MB", domainStats[0].Balloon.Rss/1024)).SetAlign(tview.AlignCenter))
 		totalRss += domainStats[0].Balloon.Rss
 
-		table.SetCell(n+1, 7, tview.NewTableCell(fmt.Sprintf("%d (%.1f%%)", domainMemoryUsed/1024, domainMemoryUsedPercent)).SetAlign(tview.AlignCenter))
+		table.SetCell(n+1, 7, tview.NewTableCell(fmt.Sprintf("%d MB (%.1f%%)", domainMemoryUsed/1024, domainMemoryUsedPercent)).SetAlign(tview.AlignCenter))
 		totalUsed += domainMemoryUsed
 	}
 	domainCount := len(domains)
