@@ -4,12 +4,9 @@ After=libvirtd.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/qemu-auto-ballooning
-Restart=always
+ExecStart=/usr/bin/qemu-auto-ballooning -r
+Restart=on-failure
 RestartSec=10
-
-LimitNOFILE=65536
-LimitNPROC=4096
 
 StandardOutput=journal
 StandardError=journal
