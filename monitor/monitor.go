@@ -32,6 +32,7 @@ func Run() {
 	app := tview.NewApplication()
 	table := tview.NewTable().SetBorders(true)
 	table.SetBordersColor(tcell.ColorDimGray)
+	table.SetBackgroundColor(tcell.ColorDefault)
 
 	go func() {
 		ticker := time.NewTicker(time.Duration(2) * time.Second)
@@ -53,7 +54,7 @@ func Run() {
 }
 
 func updateData(table *tview.Table) {
-	conn, domains, err := service.ListAllDomains()
+	conn, err := service.GetConnection()
 	if err != nil {
 		return
 	}
@@ -63,6 +64,7 @@ func updateData(table *tview.Table) {
 	if err != nil {
 		return
 	}
+
 	table.Clear()
 	table.SetCell(0, 0, tview.NewTableCell("Domain name").SetAlign(tview.AlignCenter).SetTextColor(tcell.ColorDarkGoldenrod))
 	table.SetCell(0, 1, tview.NewTableCell("Current").SetAlign(tview.AlignCenter).SetTextColor(tcell.ColorDarkGoldenrod))
@@ -77,6 +79,11 @@ func updateData(table *tview.Table) {
 	var totalRss uint64
 	var totalMaximum uint64
 	var totalUsed uint64
+
+	domains, err := service.ListAllDomains(conn)
+	if err != nil {
+		return
+	}
 
 	for n, domain := range domains {
 		defer domain.Free()
@@ -115,13 +122,13 @@ func updateData(table *tview.Table) {
 		table.SetCell(n+1, 7, tview.NewTableCell(fmt.Sprintf("%d MB (%.1f%%)", domainMemoryUsed/1024, domainMemoryUsedPercent)).SetAlign(tview.AlignCenter))
 		totalUsed += domainMemoryUsed
 	}
-	domainCount := len(domains)
-	table.SetCell(domainCount+1, 0, tview.NewTableCell("TOTAL").SetAlign(tview.AlignRight))
-	table.SetCell(domainCount+1, 1, tview.NewTableCell(fmt.Sprintf("%d MB", totalCurrent/1024)).SetAlign(tview.AlignCenter).SetTextColor(tcell.ColorDarkGreen))
-	table.SetCell(domainCount+1, 2, tview.NewTableCell(fmt.Sprintf("%d MB", totalMaximum/1024)).SetAlign(tview.AlignCenter).SetTextColor(tcell.ColorDarkRed))
-	table.SetCell(domainCount+1, 3, tview.NewTableCell(""))
-	table.SetCell(domainCount+1, 4, tview.NewTableCell(""))
-	table.SetCell(domainCount+1, 5, tview.NewTableCell(""))
-	table.SetCell(domainCount+1, 6, tview.NewTableCell(fmt.Sprintf("%d MB", totalRss/1024)).SetAlign(tview.AlignCenter).SetTextColor(tcell.ColorDarkGray))
-	table.SetCell(domainCount+1, 7, tview.NewTableCell(fmt.Sprintf("%d MB", totalUsed/1024)).SetAlign(tview.AlignCenter).SetTextColor(tcell.ColorDarkGreen))
+	totalRowNumber := len(domains) + 1
+	table.SetCell(totalRowNumber, 0, tview.NewTableCell(fmt.Sprintf("(%d) TOTAL", len(domains))).SetAlign(tview.AlignRight))
+	table.SetCell(totalRowNumber, 1, tview.NewTableCell(fmt.Sprintf("%d MB", totalCurrent/1024)).SetAlign(tview.AlignCenter).SetTextColor(tcell.ColorDarkGreen))
+	table.SetCell(totalRowNumber, 2, tview.NewTableCell(fmt.Sprintf("%d MB", totalMaximum/1024)).SetAlign(tview.AlignCenter).SetTextColor(tcell.ColorDarkRed))
+	table.SetCell(totalRowNumber, 3, tview.NewTableCell(""))
+	table.SetCell(totalRowNumber, 4, tview.NewTableCell(""))
+	table.SetCell(totalRowNumber, 5, tview.NewTableCell(""))
+	table.SetCell(totalRowNumber, 6, tview.NewTableCell(fmt.Sprintf("%d MB", totalRss/1024)).SetAlign(tview.AlignCenter).SetTextColor(tcell.ColorDarkGray))
+	table.SetCell(totalRowNumber, 7, tview.NewTableCell(fmt.Sprintf("%d MB", totalUsed/1024)).SetAlign(tview.AlignCenter).SetTextColor(tcell.ColorDarkGreen))
 }
